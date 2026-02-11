@@ -56,7 +56,31 @@ async fn main() {
 
     init_logging();
 
-    let config = Arc::new(Config::load());
+    let mut config = Config::load();
+
+    // Check if we need to authenticate (token is None or empty string)
+    if config.plex_token.as_ref().is_none_or(|s| s.is_empty()) {
+        println!("\n========================================");
+        println!("  Plex authentication required");
+        println!("========================================\n");
+        println!("  Opening browser for Plex authentication...");
+        println!("  Please sign in to Plex and authorize this application.\n");
+
+        if let Some((token, _)) = run_auth(None).await {
+            config.plex_token = Some(token);
+            if let Err(e) = config.save() {
+                error!("  ✗ Failed to save config after auth: {}", e);
+            }
+            println!("\n  ✓ Authentication successful! Starting monitoring.\n");
+        } else {
+            eprintln!("\n  ✗ Authentication failed or timed out. Please try again.");
+            eprintln!("  You can also manually add your Plex token to the config file.");
+            eprintln!("  Config location: {}\n", Config::config_path().display());
+            return;
+        }
+    }
+
+    let config = Arc::new(config);
     let cancel = CancellationToken::new();
     let (tray_tx, mut tray_rx) = mpsc::unbounded_channel::<TrayCommand>();
     let (media_tx, media_rx) = mpsc::unbounded_channel::<MediaUpdate>();
@@ -183,6 +207,10 @@ async fn run_auth(tmdb: Option<String>) -> Option<(String, Option<String>)> {
     let account = PlexAccount::new();
     let (pin_id, code) = account.request_pin().await?;
     let url = format!("https://app.plex.tv/auth#?clientID={}&code={}&context%5Bdevice%5D%5Bproduct%5D=Presence%20for%20Plex", utf8_percent_encode(APP_NAME, NON_ALPHANUMERIC), utf8_percent_encode(&code, NON_ALPHANUMERIC));
+
+    println!("\n  Auth URL: {}", url);
+    println!("  If browser didn't open, please copy and paste this URL manually.\n");
+
     if let Err(e) = open::that(&url) { warn!("Browser failed: {}", e); }
 
     let token = tokio::time::timeout(AUTH_TIMEOUT, async {
