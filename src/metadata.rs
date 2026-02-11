@@ -78,7 +78,10 @@ impl MetadataEnricher {
     }
 
     async fn try_tmdb(&self, info: &mut MediaInfo, key: &str) -> bool {
-        let Some(ref tmdb_id) = info.tmdb_id else { return false };
+        let Some(ref tmdb_id) = info.tmdb_id else {
+            log::warn!("TMDB: No ID for '{}'", info.title);
+            return false
+        };
 
         let result = match info.media_type {
             MediaType::Movie => self.fetch_tmdb_images(&format!("/movie/{}/images", tmdb_id)).await,
@@ -92,7 +95,14 @@ impl MetadataEnricher {
         };
 
         self.set_art_cached(key, result.clone());
-        if let Some(url) = result { info!("TMDB artwork: {}", url); info.art_url = Some(url); true } else { false }
+        if let Some(url) = result {
+            info!("TMDB artwork: {}", url);
+            info.art_url = Some(url);
+            true
+        } else {
+            log::warn!("TMDB: No images for '{}' (ID: {})", info.title, tmdb_id);
+            false
+        }
     }
 
     async fn fetch_tmdb_images(&self, path: &str) -> Option<String> {
@@ -121,12 +131,20 @@ impl MetadataEnricher {
             Some(data.data.first()?.mal_id.to_string())
         }.await;
 
+        if mal_id.is_none() {
+            log::warn!("MAL: No results for '{}'", title);
+        }
+
         self.set_mal_cached(&cache_key, mal_id.clone());
         if let Some(id) = mal_id { info!("MAL ID: {}", id); info.mal_id = Some(id); }
     }
 
     async fn try_musicbrainz(&self, info: &mut MediaInfo, key: &str) {
-        let (Some(artist), Some(album)) = (&info.artist, &info.album) else { self.set_art_cached(key, None); return };
+        let (Some(artist), Some(album)) = (&info.artist, &info.album) else {
+            log::warn!("Music: Missing artist/album for '{}'", info.title);
+            self.set_art_cached(key, None);
+            return
+        };
         let query = format!("artist:\"{}\" AND release:\"{}\"", artist.replace('"', ""), album.replace('"', ""));
         let ua = concat!("PresenceForPlex/", env!("CARGO_PKG_VERSION"), " (https://github.com/abarnes6/presence-for-plex)");
 
@@ -139,15 +157,25 @@ impl MetadataEnricher {
             data.releases.first().map(|rel| rel.id.clone())
         }.await;
 
-        let Some(mbid) = mbid else { self.set_art_cached(key, None); return };
+        let Some(mbid) = mbid else {
+            log::warn!("MusicBrainz: No results for '{} - {}'", artist, album);
+            self.set_art_cached(key, None);
+            return
+        };
         let cover_url = format!("{}/release/{}/front", COVERART_API, mbid);
 
         let exists = self.client.head(&cover_url).header("User-Agent", ua).send().await
             .map(|r| r.status().is_success() || r.status().is_redirection()).unwrap_or(false);
 
         let result = if exists { Some(cover_url) } else { None };
+        if result.is_none() {
+            log::warn!("Music: No cover for '{} - {}' (MBID: {})", artist, album, mbid);
+        }
         self.set_art_cached(key, result.clone());
-        if let Some(url) = result { info!("MusicBrainz artwork: {}", url); info.art_url = Some(url); }
+        if let Some(url) = result {
+            info!("MusicBrainz artwork: {}", url);
+            info.art_url = Some(url);
+        }
     }
 
     fn cleanup_cache(&self) {
