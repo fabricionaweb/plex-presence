@@ -77,7 +77,7 @@ impl Config {
         std::fs::write(&path, contents)
     }
 
-    fn config_path() -> PathBuf {
+    pub fn config_path() -> PathBuf {
         Self::app_dir().join("config.yaml")
     }
 
